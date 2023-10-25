@@ -6,7 +6,6 @@ import lombok.*;
 import org.springframework.data.geo.Point;
 
 @Entity
-@AllArgsConstructor
 @NoArgsConstructor
 public class FeaturesPoint {
 
@@ -14,4 +13,11 @@ public class FeaturesPoint {
     @Setter
     @Getter
     private Point point;
+
+    public FeaturesPoint(Point point) {
+        if(point == null) {
+            throw new IllegalArgumentException();
+        }
+        this.point = point;
+    }
 }

@@ -1,143 +1,143 @@
 package com.pattern.recognition.application;
 
-import com.pattern.recognition.domain.LineSegment;
+import com.pattern.recognition.domain.LineSegmentServicePort;
+import com.pattern.recognition.domain.Segment;
 import org.springframework.data.geo.Point;
-import org.springframework.data.util.Pair;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
-public class LineSegmentService {
-    public List<LineSegment> findLineSegments(Point[] points, int numberOfPoints) {
-        List<LineSegment> result = new ArrayList<>();
-        List<LineSegment> segments = new ArrayList<>();
+public class LineSegmentService implements LineSegmentServicePort {
 
-        // Create all possible line segments
-        generateAllLineSegmentsCombinations(points, segments);
-
-        // Sort line segments by slope
-        Collections.sort(segments);
-
-        TreeSet<LineSegment> activeSegments = new TreeSet<>();
-
-        // Process each point
-        for (Point point : points) {
-            // Remove inactive segments
-            removeInactiveSegments(activeSegments, point);
-
-            // Add new segments
-            for (LineSegment segment : segments) {
-                if (segment.getLeft().equals(point)) {
-                    activeSegments.add(segment);
-                }
-            }
-
-            // Check for intersections
-            for (LineSegment segment : activeSegments) {
-                if (segment.contains(point)) {
-                    segment.addPoint(point);
-                    if (segment.getPoints().size() >= numberOfPoints && !result.contains(segment)) {
-                        result.add(segment);
-                    }
-                }
-            }
-
+    /**
+     * Given a list of points, it returns the list of line segments that contains at least minAmountOfIntersections points
+     *
+     * @param points the list of points to process
+     * @param minAmountOfIntersections the minimum amount of points to find on a line
+     * @return the list of line segments containing at least minAmountOfIntersections points
+     */
+    public List<Segment> findLines(Point[] points, Integer minAmountOfIntersections) {
+        if(minAmountOfIntersections == null || minAmountOfIntersections < 1) {
+            throw new IllegalArgumentException();
         }
 
-        return result;
+        Set<Segment> lines = new HashSet<>();
+        List<Segment> allSegments = generateAllLineSegmentsCombinations(points);
+
+        Map<Double, List<Segment>> segmentsBySlope = splitSegmentsBySlope(allSegments);
+        segmentsBySlope.forEach((slope, segmentList) -> lines.addAll(recursiveListProcessing(segmentList)));
+        return lines.stream().filter(line -> line.getIntersections().size() >= minAmountOfIntersections).collect(Collectors.toList());
     }
 
-    private void removeInactiveSegments(TreeSet<LineSegment> activeSegments, Point point) {
-        Iterator<LineSegment> it = activeSegments.iterator();
-        while (it.hasNext()) {
-            LineSegment segment = it.next();
-            if (segment.getRight().getX() < point.getX()) {
-                it.remove();
-            } else {
-                break;
+    /**
+     * A recursive method that merges line segments together if they are adjacent
+     *
+     * @param originalSegmentList the list containing the previous state of the line segments
+     * @return a list containing the merged line segments
+     */
+    private List<Segment> recursiveListProcessing(List<Segment> originalSegmentList) {
+        List<Segment> processedSegmentList = new ArrayList<>(originalSegmentList);
+        for (int i = 0; i < originalSegmentList.size(); i++) {
+            for (int j = i + 1; j < originalSegmentList.size(); j++) {
+                Segment leftSegment = originalSegmentList.get(i);
+                Segment rightSegment = originalSegmentList.get(j);
+                if(leftSegment.isAdjacent(rightSegment)) {
+                    //removeExistingMergeSegmentFromList(originalSegmentList, processedSegmentList, leftSegment, rightSegment);
+                    removeExistingMergeSegmentFromList(processedSegmentList, leftSegment, rightSegment);
+                    mergeSegments(processedSegmentList, leftSegment, rightSegment);
+                    processedSegmentList.sort(Comparator.comparingDouble(o -> o.getRight().getX()));
+                    return recursiveListProcessing(processedSegmentList);
+                }
+
             }
         }
+        return processedSegmentList;
     }
 
-    private void generateAllLineSegmentsCombinations(Point[] points, List<LineSegment> segments) {
+    /**
+     * Given two adjacent line segments, it merges them, removing the "orphans" line segments and adding the new merged
+     * line segment to the space
+     *
+     * @param segmentList the list of line segments on the space
+     * @param leftSegment the leftmost line segment to merge
+     * @param rightSegment the rightmost line segment to merge
+     */
+    private void mergeSegments(List<Segment> segmentList, Segment leftSegment, Segment rightSegment) {
+        Segment mergedSegment = new Segment(leftSegment.getLeft(), rightSegment.getRight());
+        mergedSegment.getIntersections().addAll(leftSegment.getIntersections());
+        mergedSegment.getIntersections().addAll(rightSegment.getIntersections());
+        removeOrphans(segmentList, leftSegment.getRight());
+        segmentList.remove(leftSegment);
+        segmentList.remove(rightSegment);
+        segmentList.add(mergedSegment);
+    }
+
+    /**
+     * Given a line segment list and two adjacent segments, it deletes the already existing merge segment
+     *
+     * @param segmentList the list of segments on the space
+     * @param leftSegment the leftmost line segment
+     * @param rightSegment the rightmost line segment
+     */
+    private void removeExistingMergeSegmentFromList(List<Segment> segmentList, Segment leftSegment, Segment rightSegment) {
+        findSegmentByMargins(segmentList, leftSegment.getLeft(), rightSegment.getRight()).ifPresent(segmentList::remove);
+    }
+
+
+    private void removeOrphans(List<Segment> segmentList, Point deletedPoint) {
+        List<Segment> orphans = segmentList.stream().filter(point -> point.getLeft().equals(deletedPoint) || point.getRight().equals(deletedPoint)).collect(Collectors.toList());
+        segmentList.removeAll(orphans);
+    }
+
+    /**
+     * Given a line segment list and two points, it searches for an existing segment delimited by those points
+     *
+     * @param segmentList the list of segments on the space
+     * @param left the left margin
+     * @param right the right margin
+     * @return a line segment with the input margin, if it already exists on the space
+     */
+    private Optional<Segment> findSegmentByMargins(List<Segment> segmentList, Point left, Point right) {
+        return segmentList.stream().filter(segment ->
+            segment.getLeft().equals(left) && segment.getRight().equals(right)
+        ).findFirst();
+    }
+
+    /**
+     * Given a list of segments, it groups them by slope
+     *
+     * @param allSegments the input list of segments
+     * @return an HashMap containing the segment list grouped by their slope
+     */
+    private Map<Double, List<Segment>> splitSegmentsBySlope(List<Segment> allSegments) {
+        Map<Double, List<Segment>> segmentsBySlope = new HashMap<>();
+        allSegments.forEach(segment -> {
+            double slope = segment.getSlope();
+            if (!segmentsBySlope.containsKey(slope)) {
+                segmentsBySlope.put(slope, new ArrayList<>());
+            }
+            segmentsBySlope.get(slope).add(segment);
+        });
+        return segmentsBySlope;
+    }
+
+    /**
+     * Given an array of points, it generates every possible segment between them
+     *
+     * @param points an array of points on the space
+     * @return the list of all possible segments
+     */
+    private List<Segment> generateAllLineSegmentsCombinations(Point[] points) {
+        List<Segment> segmentList = new ArrayList<>();
         for (int i = 0; i < points.length; i++) {
             for (int j = i + 1; j < points.length; j++) {
-                LineSegment segment = new LineSegment(points[i], points[j]);
-                segments.add(segment);
+                Segment segment = new Segment(points[i], points[j]);
+                segmentList.add(segment);
             }
         }
+        segmentList.sort(Comparator.comparingDouble(o -> o.getLeft().getX()));
+        return segmentList;
     }
-
-
-
-    //-------------------------
-
-    public static List<Pair<LineSegment, List<Point>>> findLineSegmentsNew(Point[] points, int M) {
-        List<Pair<LineSegment, List<Point>>> segments = new ArrayList<>();
-        List<Event> events = new ArrayList<>();
-        for (int i = 0; i < points.length - 1; i++) {
-            for (int j = i + 1; j < points.length; j++) {
-                events.add(new Event(points[i], points[j]));
-            }
-        }
-        events.sort(Comparator.comparing(Event::getX));
-        Set<Point> activePoints = new TreeSet<>(Comparator.comparing(Point::getY));
-        for (Event event : events) {
-            if (event.isLeft()) {
-                activePoints.add(event.getLeft());
-                checkIntersections(activePoints, event.getLeft(), segments, M);
-            } else {
-                checkIntersections(activePoints, event.getRight(), segments, M);
-                activePoints.remove(event.getLeft());
-            }
-        }
-        return segments;
-    }
-
-    private static void checkIntersections(Set<Point> activePoints, Point point, List<Pair<LineSegment, List<Point>>> segments, int M) {
-        Point above = activePoints.higher(point);
-        Point below = activePoints.lower(point);
-        if (above != null && below != null) {
-            LineSegment line = new LineSegment(below, above);
-            List<Point> involvedPoints = new ArrayList<>();
-            for (Point p : activePoints) {
-                if (line.contains(p)) {
-                    involvedPoints.add(p);
-                }
-            }
-            if (involvedPoints.size() >= M) {
-                segments.add(new Pair<>(line, involvedPoints));
-            }
-        }
-    }
-
-    private static class Event {
-        private final Point left;
-        private final Point right;
-        private final double x;
-
-        public Event(Point left, Point right) {
-            this.left = left;
-            this.right = right;
-            this.x = Math.min(left.getX(), right.getX());
-        }
-
-        public Point getLeft() {
-            return left;
-        }
-
-        public Point getRight() {
-            return right;
-        }
-
-        public double getX() {
-            return x;
-        }
-
-        public boolean isLeft() {
-            return left.getX() < right.getX();
-        }
-    }
-
 }
